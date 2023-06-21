@@ -1,0 +1,35 @@
+global:
+  scrape_interval: 1m
+
+scrape_configs:
+  - job_name: "prometheus"
+    scrape_interval: 1m
+    static_configs:
+    - targets: ["localhost:9090"]
+
+  - job_name: "node"
+    static_configs:
+    - targets: ["node-exporter:9100"]
+
+  - job_name: "postgresql1"
+    static_configs:
+      - targets: ['postgres-exporter1:9187']
+        labels:
+          alias: postgres1
+
+  - job_name: "postgresql2"
+    static_configs:
+      - targets: ['postgres-exporter2:9187']
+        labels:
+          alias: postgres2
+
+  - job_name: "postgresql3"
+    static_configs:
+      - targets: ['postgres-exporter3:9187']
+        labels:
+          alias: postgres3
+
+  - job_name: 'haproxy'
+    scrape_interval: 15s
+    static_configs:
+    - targets: ['haproxy:7000']

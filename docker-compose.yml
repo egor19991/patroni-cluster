@@ -1,0 +1,199 @@
+version: "3.8"
+
+networks:
+    demo:
+        driver: bridge
+        enable_ipv6: false
+
+services:
+    etcd1: &etcd
+        image: ek42/patroni:15
+        networks: [ demo ]
+        environment:
+            ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+            ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+            ETCD_INITIAL_CLUSTER: etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+            ETCD_INITIAL_CLUSTER_STATE: new
+            ETCD_INITIAL_CLUSTER_TOKEN: tutorial
+        container_name: demo-etcd1
+        hostname: etcd1
+        command: etcd -name etcd1 -initial-advertise-peer-urls http://etcd1:2380
+
+    etcd2:
+        <<: *etcd
+        container_name: demo-etcd2
+        hostname: etcd2
+        command: etcd -name etcd2 -initial-advertise-peer-urls http://etcd2:2380
+
+    etcd3:
+        <<: *etcd
+        container_name: demo-etcd3
+        hostname: etcd3
+        command: etcd -name etcd3 -initial-advertise-peer-urls http://etcd3:2380
+
+    haproxy:
+        image: ek42/patroni:15
+        networks: [ demo ]
+        env_file: docker/patroni.env
+        hostname: haproxy
+        container_name: demo-haproxy
+        ports:
+            - "5000:5000"
+            - "5001:5001"
+            - "7000:7000"
+        command: haproxy
+        environment: &haproxy_env
+            ETCDCTL_ENDPOINTS: http://etcd1:2379,http://etcd2:2379,http://etcd3:2379
+            PATRONI_ETCD3_HOSTS: "'etcd1:2379','etcd2:2379','etcd3:2379'"
+            PATRONI_SCOPE: demo
+        volumes:
+            - ./haproxy/haproxy.tmpl:/etc/confd/templates/haproxy.tmpl
+
+    patroni1:
+        image: ek42/patroni:15
+        networks: [ demo ]
+        env_file: docker/patroni.env
+        hostname: patroni1
+        container_name: demo-patroni1
+        environment:
+            <<: *haproxy_env
+            PATRONI_NAME: patroni1
+
+    patroni2:
+        image: ek42/patroni:15
+        networks: [ demo ]
+        env_file: docker/patroni.env
+        hostname: patroni2
+        container_name: demo-patroni2
+        environment:
+            <<: *haproxy_env
+            PATRONI_NAME: patroni2
+
+    patroni3:
+        image: ek42/patroni:15
+        networks: [ demo ]
+        env_file: docker/patroni.env
+        hostname: patroni3
+        container_name: demo-patroni3
+        environment:
+            <<: *haproxy_env
+            PATRONI_NAME: patroni3
+        #deploy:
+        #   resources:
+        #        limits:
+        #            cpus: '0.30'
+        #            memory: 400M
+        #        reservations:
+        #            cpus: '0.10'
+        #            memory: 200M
+
+    node-exporter:
+        image: prom/node-exporter:latest
+        container_name: node-exporter
+        hostname: node-exporter
+        volumes:
+        - /proc:/host/proc:ro
+        - /sys:/host/sys:ro
+        - /:/rootfs:ro
+        command:
+        - '--path.procfs=/host/proc'
+        - '--path.rootfs=/rootfs'
+        - '--path.sysfs=/host/sys'
+        - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+        expose:
+        - 9100
+        networks: [ demo ]
+        
+    prometheus:
+        image: prom/prometheus:v2.44.0
+        container_name: prometheus
+        hostname: prometheus
+        volumes:
+        - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+        - prometheus_data:/prometheus
+        command:
+        - '--config.file=/etc/prometheus/prometheus.yml'
+        - '--storage.tsdb.path=/prometheus'
+        - '--web.console.libraries=/etc/prometheus/console_libraries'
+        - '--web.console.templates=/etc/prometheus/consoles'
+        - '--web.enable-lifecycle'
+        expose:
+        - 9090
+        ports:
+          - 9090:9090
+        networks: [ demo ]
+
+    grafana:
+        image: grafana/grafana:latest
+        container_name: grafana
+        hostname: grafana
+        environment:
+        - GF_INSTALL_PLUGINS = "grafana-clock-panel,grafana-simple-json-datasource,1860-node-exporter-full"
+        - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+        - GF_AUTH_ANONYMOUS_ENABLED=true
+        - GF_AUTH_BASIC_ENABLED=false
+        - GF_ENABLE_GZIP=true
+        - GF_USERS_DEFAULT_THEME=light
+        - GF_DEFAULT_APP_MODE=development
+        ports:
+        - 3000:3000
+        networks: [ demo ]
+        user: '104'
+        volumes:
+            - grafana_etc_test:/etc/grafana
+            - grafana_lib_test:/var/lib/grafana
+            - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+            - ./grafana/datasources:/etc/grafana/provisioning/datasources
+
+    postgres_exporter:
+        container_name: exporter_container1
+        image: prometheuscommunity/postgres-exporter:latest
+        environment: 
+            DATA_SOURCE_URI: "patroni1:5432/postgres?sslmode=disable"
+            DATA_SOURCE_USER: "postgres"
+            DATA_SOURCE_PASS: "postgres"
+            PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+        volumes:
+        - ./postgres_exporter/queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+        hostname: postgres-exporter1
+        networks: [ demo ]
+
+    postgres_exporter2:
+        container_name: exporter_container2
+        image: prometheuscommunity/postgres-exporter:latest
+        environment:
+            DATA_SOURCE_URI: "patroni2:5432/postgres?sslmode=disable"
+            DATA_SOURCE_USER: "postgres"
+            DATA_SOURCE_PASS: "postgres"
+            PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+        volumes:
+        - ./postgres_exporter/queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+        hostname: postgres-exporter2
+        networks: [ demo ]
+
+    postgres_exporter3:
+        container_name: exporter_container3
+        image: prometheuscommunity/postgres-exporter:latest
+        environment:
+            DATA_SOURCE_URI: "patroni3:5432/postgres?sslmode=disable"
+            DATA_SOURCE_USER: "postgres"
+            DATA_SOURCE_PASS: "postgres"
+            PG_EXPORTER_EXTEND_QUERY_PATH: "/etc/postgres_exporter/queries.yaml"
+        volumes:
+        - ./postgres_exporter/queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+        hostname: postgres-exporter3
+        networks: [ demo ]
+
+    pgbench:
+        image: postgres:14
+        container_name: pgbench
+        hostname: pgbench
+        environment:
+            POSTGRES_USER : postgres
+            POSTGRES_PASSWORD: postgres
+        networks: [ demo ]
+
+volumes:
+    prometheus_data: {}
+    grafana_etc_test:
+    grafana_lib_test:
